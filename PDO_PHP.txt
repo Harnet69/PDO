@@ -1,0 +1,117 @@
+PDO - "прослойка" для работы PHP с базами данных
+
+Узнать поддерживаемые в своём PHP базы данных можно коммандой :  print_r(PDO::getAvailableDrivers()); или в phpinfo();
+
+Работа с PDO: 
+- создать экземпляр класса PDO
+	$pdo = new PDO('dsn', 'user_mysql', 'pass_mysql'); // аргумент dsn - строка подключения в БД (<db_type>:host=<host>;dbname=<db> 
+  		Например для MySql это mysql:localhost;dbname=pdo_tutorial), для SQLite - sqlite:pdo_tutorial.sqlite	
+  
+  всё PDO надо заключать в Exceptions  !!! 
+<?php
+ try{
+  $pdo = new PDO('mysql:host=localhost;dbname=pdo', 'admin', 'admin');// подключение к СУБД (её нужно вначале создать)
+  $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); // включение режима отлавливания ошибок и работа с исключениями
+
+  $pdo->exec(SQL_CREATE_MENU_TABLE);// возвращает действия были произведены над БД
+  var_dump($pdo);
+ }
+ catch(PDO_Exception $e){
+  exit($e->getMessage());
+ }
+?>
+- у PDO есть 2 варианта работы с СУБД : изменение стостояния(записать, удалить, изменить) и выборка(показать)
+$result = $pdo->query('SELECT * FROM menu'); // выбока всех значений	
+$result->fetchAll(PDO::FETCH_ASSOC); = сформировать ассоциативный массив из результата выборки(есть разные варианты, можно "расфетчить" в класс, по объектам, одну колонку и т.д.)
+$result->fetch();// возвращает одну запись, вызванный повторно - вторую, и т.д.
+
+ПОДГОТОВЛЕННИЕ ВЫРАЖЕНИЯ (ЗАПРОСЫ PREPARE STATEMENT) !!! Mysql поддерживает неименованные подготовленные запросы (?), эмуляция при помощи PDO позволяет использовать и именованные (:name) 
+
+  Выражения - заранее подготовленные и скомпилированные выражения, которые могут быть многократно выполнены только отправкой серверу наборов данных
+- с помощью НЕИМЕНОВАННЫХ параметров (?) :
+	$pdo->prepare($sql); //$sql строка запроса, в которой присутствуют параметры напр. 
+		  $stmt = $pdo->prepare(" INSERT INTO books (name, lastname, age) VALUES (?, ?, ?)");// подготовка запроса с помощью НЕИМЕНОВАННЫХ параметров (names placeholders), ПОРЯДОК ОЧЕНЬ ВАЖЕН
+ 		 $res =   $stmt->execute(['Vasia','Vasiliev',16]);// передача параметров с помощью нумерованного массива
+
+- с помощью ИМЕНОВАННЫХ параметров (:name) :
+  	$stmt = $pdo->prepare("INSERT INTO books (name, lastname, age) VALUES (:name, :lastname, :age)");//подготовка запроса с помощью ИМЕНОВАННЫХ параметров, ПОРЯДОК НЕ ВАЖЕН
+	$res = $stmt->execute([':name'=>'Vasia', ':lastname'=>'Vasiliev', ':age'=>16]); // передача параметров с помощью ассоциативного массива (если передать больше или меньше параметров чем в подготовленном запросе - выбросит исключение)
+  !!! можно передавать значения с помощью с bindValue :
+	$stmt->bindValue(':name', 'Nasia');// в случае с неименованными  параметрами (?) указывается номер
+	$stmt->execute;
+	var_dump($stmt->fetchAll(PDO::FETCH_ASSOC));
+  !!! динамические запросы через переменные передаются с помощью bindParam : $stmt = bindParam(1, $name, PDO::PARAM_INT);
+	  Например : 	
+	$stmt = $pdo->prepare("INSERT INTO books (name, lastname, age) VALUES (?, ?, ?)");
+	$name = "Valera";
+	$lastname = "Dym";
+	$age= 58;
+	$stmt->bindParam(1, $name);
+	$stmt->bindParam(2, $lastname);
+	$stmt->bindParam(3, $age, PDO::PARAM_INT); // третий
+	$res = $stmt->execute();
+	var_dump($res);
+		
+ТРАНЗАКЦИИ : (ЛОГИЧЕСКАЯ ЕДИНИЦА РАБОТЫ С БД. В случае если в процессе транзакции произошла ошибка - все изменения будут отменены)
+	Например при работе с двумя связанными таблицами нужно добавлять данные и в одну и во вторую, и если при вставке в одну всё получилось, а во второй произошла ошибка
+  !!! транзакции нужно в отдельный блок try/catch
+	<?php
+ try{
+  $pdo = new PDO('mysql:host=localhost;dbname=pdo', 'admin', 'admin');
+  $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+  $pdo->exec('
+	CREATE TABLE IF NOT EXISTS au_person(
+		id INT UNSIGNED AUTO_INCREMENT NOT NULL,
+		firstname VARCHAR(50) NOT NULL,
+		lastname VARCHAR(50) NOT NULL,
+		patro VARCHAR(50) NOT NULL,
+		PRIMARY KEY (id)
+	)
+');
+  $pdo->exec('
+	CREATE TABLE IF NOT EXISTS au_account(
+		id INT UNSIGNED AUTO_INCREMENT NOT NULL,
+		person_id INT(50) UNSIGNED NOT NULL,
+		username VARCHAR(50) NOT NULL,
+		password VARCHAR(100) NOT NULL,
+		PRIMARY KEY (id),
+		KEY person_id_idx1 (person_id),
+		CONSTRAINT fk_account_ref_person_1
+			FOREIGN KEY (person_id) REFERENCES au_person (id)
+				ON DELETE RESTRICT
+				ON UPDATE RESTRICT
+	)
+');
+ }
+ catch(PDO_Exception $e){
+  exit($e->getMessage());
+ }
+
+ try{
+  $pdo->beginTransaction(); // Начало транзакции
+  $stmt = $pdo->prepare('
+    INSERT INTO au_person(firstname, lastname, patro) VALUES (:firstname, :lastname, :patro)
+  '); // подготовленный запрос
+  $stmt->execute([
+   ':firstname' => 'Hanna',
+   ':lastname' => 'Kokhanava',
+   ':patro' => 'Viat'
+  ]);// передача значений в подготовленный запрос
+
+  $id = $pdo->lastInsertId();// получение идентификатора последнего добавленного
+  $stmt = $pdo->prepare('
+    INSERT INTO au_account(person_id, username, password) VALUES (:person_id, :username, :password)
+  ');// подготовленный запрос
+  $stmt->execute([
+    ':person_id'=>$id,
+    ':username'=>'harnet',
+    ':password'=>'12345'
+  ]);
+  $pdo->commit(); // фиксирование транзакции
+ }
+ catch(PDOException $e){
+  echo $e->getMessage(); // вывод сообщения об ошибке
+  $pdo->rollBack(); // отмена (откат) транзакции в случае возможных проблем
+ }
+?>
